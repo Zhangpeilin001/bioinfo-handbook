@@ -1,10 +1,13 @@
 /* ============================================================
    生信四年作战手册 · Service Worker（文件版）
-   离线缓存策略：缓存优先 → 网络回退 → 失败时返回缓存首页
-   与 index.html 内 Phase2PWA 内联版逻辑保持一致（v4.2 缓存名）
+   离线缓存策略：
+     - 导航请求（index.html）→ 网络优先，保证总是最新版
+     - 静态资源（manifest.json 等）→ 缓存优先
+     - 网络失败 → 回退缓存首页（离线兜底）
+   版本号递增触发 SW 重装，清掉旧缓存。改 index.html 后记得同步递增。
    ============================================================ */
 
-const CACHE_NAME = 'shengxin-handbook-v4.3';
+const CACHE_NAME = 'shengxin-handbook-v4.4';
 const urlsToCache = [
   './',
   'manifest.json'
@@ -34,6 +37,24 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return;
 
+  // 导航请求（index.html）走网络优先：保证每次打开都是最新版，避免"改了代码但手机还是旧版"
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then(netResp => {
+          if (netResp && netResp.status === 200) {
+            const clone = netResp.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+            return netResp;
+          }
+          return caches.match(e.request);
+        })
+        .catch(() => caches.match('./'))
+    );
+    return;
+  }
+
+  // 静态资源走缓存优先
   e.respondWith(
     caches.match(e.request).then(resp => {
       if (resp) return resp;
