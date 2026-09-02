@@ -32797,7 +32797,7 @@ function initV42() {
         }
       }
       if (id === 'today-view' && window.SmartDaily) SmartDaily.render();
-      if (id === 'debt-pool' && window.DebtPoolEngineSmart) DebtPoolEngineSmart.render();
+      if (id === 'debt-pool' && window.DebtPoolEngine && DebtPoolEngine.render) DebtPoolEngine.render();
       if (id === 'mistake-review') { MistakeBook.render(); if (window.MistakeAnalyzer) MistakeAnalyzer.render(); }
       if (id === 'goal-graph') { SemesterGoal.render(); if (window.KnowledgeGraph) KnowledgeGraph.render(); }
       if (id === 'update-weekly') { if (window.DailyAutoUpdate) DailyAutoUpdate.renderPanel(); if (window.WeeklyReport) WeeklyReport.render(); }
