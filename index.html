@@ -4678,6 +4678,7 @@ sr"><b>周五</b><span>白天上课 | 晚19:00-20:00 开源社区：在GitHub上
 <input type="date" id="debtDeadline" style="width:100%;padding:8px 12px;border-radius:var(--radius-sm);border:1px solid var(--border-medium);background:var(--bg-primary);color:var(--text-primary);font-family:inherit;font-size:14px;">
 </div>
 <button onclick="window.addDebt()" class="btn primary" style="height:38px;padding:0 18px;">添加</button>
+<button onclick="DebtPoolEngine.addFromImage()" class="btn secondary" style="height:38px;padding:0 12px;font-size:12px;">📷 AI识别添加</button>
 </div>
 </div>
 
@@ -5338,6 +5339,14 @@ GitHub：github.com/xxx
       </div>
     </div>
   </div>
+  <div style="margin-top:10px;padding:10px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+  <div style="font-size:13px;color:#1a1a1a;margin-bottom:6px;">📷 截图识别添加知识点</div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <input class="ai-dark-input" id="kgManualTopic" placeholder="或手动输入知识点名称" style="flex:1;font-size:12px;padding:4px 8px;">
+    <button class="ai-dark-btn secondary" onclick="KnowledgeGraph.manualAddFromInput()" style="font-size:11px;padding:4px 10px;">添加</button>
+    <button class="ai-dark-btn" onclick="KnowledgeGraph.addFromImage()" style="font-size:11px;padding:4px 10px;">📷 图片识别</button>
+  </div>
+</div>
   <div id="kgStats" style="margin-bottom:12px;"></div>
   <div id="kgRecommend" style="margin-bottom:12px;"></div>
   <div id="kgGraph" style="min-height:200px;"><div style="text-align:center;padding:20px;color:#333;">加载中...</div></div>
@@ -11273,6 +11282,26 @@ const DebtPoolEngine = {
       } else {
         autoEl.innerHTML = autoDebts.map(d => `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--accent-orange-soft);border:1px solid rgba(217,119,6,0.15);border-radius:var(--radius-md);"><span style="font-size:13px;color:var(--accent-orange);flex:1;">⚠️ ${escapeHtml(d.text)}</span><span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">来自今日任务</span></div>`).join('');
       }
+    }
+  },
+
+  // 📷 图片识别添加债务
+  async addFromImage() {
+    const b64 = await showImagePicker();
+    if (!b64) return;
+    const toast = (msg, type) => { if (window.ToastNotify) { type==='error'?ToastNotify.error(msg):ToastNotify.success(msg); } else { alert(msg); } };
+    toast('正在识别图片中的学习任务...', 'info');
+    try {
+      const text = await chatVisionEnhanced(b64,
+        '你是一个学习任务识别助手。请识别这张图片中的作业/学习任务内容，输出简洁的任务描述（20字以内）。' +
+        '如果图片中是教材/习题截图，提取知识点名称作为任务描述。只输出任务文字，不要其他内容。'
+      );
+      const clean = text.trim().substring(0, 50);
+      if (clean.length < 3) throw new Error('未识别到有效任务');
+      this.add(clean, 'credit', '');
+      toast('✅ 已添加债务：' + clean, 'success');
+    } catch(e) {
+      toast('❌ 识别失败：' + e.message, 'error');
     }
   }
 };
@@ -19033,6 +19062,39 @@ const KnowledgeGraph = {
       html += '<div style="background:#ffffff;border-radius:8px;padding:10px 14px;flex:1;min-width:80px;"><div style="font-size:20px;font-weight:700;color:#1a1a1a;">' + stats.uncovered + '</div><div style="font-size:11px;color:#444;">未覆盖</div></div>';
       html += '</div>';
       statsEl.innerHTML = html;
+    }
+  },
+
+  // 手动输入添加知识点（从输入框）
+  manualAddFromInput() {
+    const input = document.getElementById('kgManualTopic');
+    if (!input) return;
+    const topic = input.value.trim();
+    if (!topic) { if (window.ToastNotify) ToastNotify.info('请输入知识点名称'); return; }
+    this.addNode(topic, 'manual', 0);
+    input.value = '';
+    if (window.ToastNotify) ToastNotify.success('已添加知识点：' + topic);
+    this.render();
+  },
+
+  // 📷 图片识别添加知识点
+  async addFromImage() {
+    const b64 = await showImagePicker();
+    if (!b64) return;
+    const toast = (msg, type) => { if (window.ToastNotify) { type==='error'?ToastNotify.error(msg):ToastNotify.success(msg); } else { alert(msg); } };
+    toast('正在识别图片中的知识点...', 'info');
+    try {
+      const text = await chatVisionEnhanced(b64,
+        '你是一个知识点识别助手。请识别这张图片中的课程/教材截图，提取核心知识点名称（10字以内）。' +
+        '只输出知识点名称，不要其他文字。如果图片中有多个知识点，输出最重要的一个。'
+      );
+      const clean = text.trim().substring(0, 30);
+      if (clean.length < 2) throw new Error('未识别到知识点');
+      this.addNode(clean, 'image', 0);
+      toast('✅ 已添加知识点：' + clean, 'success');
+      this.render();
+    } catch(e) {
+      toast('❌ 识别失败：' + e.message, 'error');
     }
   }
 };
