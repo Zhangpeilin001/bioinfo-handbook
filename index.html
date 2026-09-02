@@ -17088,13 +17088,10 @@ const SmartDaily = {
     const hasSubjectMastery = window.SubjectMastery && SubjectMastery.getAll().some(s => s.chapters.some(c => c.mastery > 0));
     const hasSkillTree = window.SkillTree && Object.values(SkillTree.getData() || {}).some(d => d && (d.mastery || 0) > 0);
     if (!hasMistakes && !hasDebts && !hasCourseSchedule && !hasSubjectMastery && !hasSkillTree) {
-      // 入学前（pre）阶段：无学习数据也生成基础准备任务（keyTasks），非编造
-      if (semester === 'pre') {
-        const sem = getCurrentSemester();
-        return (sem && sem.keyTasks ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'])
-          .map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30 }));
-      }
-      return [];
+      // 无学习数据时：用当前阶段 keyTasks 生成基础任务（非编造），任何阶段都适用
+      const sem = getCurrentSemester();
+      return (sem && sem.keyTasks && sem.keyTasks.length ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'])
+        .map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30 }));
     }
 
     const templates = {
@@ -17240,22 +17237,22 @@ const SmartDaily = {
     const _sem = getCurrentSemester();
     const _phaseName = _sem ? _sem.name : '未知';
     const _phaseKeyTasks = _sem && _sem.keyTasks ? _sem.keyTasks.join('、') : '';
-    // 入学前（pre）阶段：无学习数据时直接用keyTasks，不调AI（避免AI对未知大学阶段产生不准确推荐）
+    // 无学习数据时：直接用当前阶段 keyTasks 作为基础任务，不调 AI（避免 AI 对未知阶段产生不准确推荐）
     const _hasAnyData = (window.MistakeBook && MistakeBook.getAll().length > 0)
       || (debts && debts.filter(d => !d.paid).length > 0)
       || (window.CourseSchedule && CourseSchedule.getTotalFreeMinutes() > 0)
       || (window.SubjectMastery && SubjectMastery.getAll().some(s => s.chapters.some(c => c.mastery > 0)))
       || (window.SkillTree && Object.values(SkillTree.getData() || {}).some(cat => (cat.nodes || []).some(n => SkillTree.getMastery(n.id) > 0)));
-    if (!_hasAnyData && semester === 'pre') {
-      const allKeys = _sem && _sem.keyTasks ? _sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
+    if (!_hasAnyData) {
+      const allKeys = _sem && _sem.keyTasks && _sem.keyTasks.length ? _sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
       const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
       const undone = allKeys.filter(k => !doneMap[k]);
       if (undone.length === 0) {
-        const tasks = [{ text: '🎉 入学前准备任务已全部完成，静待开学！', priority: 'p0', est: 0, id: 'smart_pre_done', done: false }];
+        const tasks = [{ text: '🎉 本阶段关键任务已全部完成，继续保持！', priority: 'p0', est: 0, id: 'smart_phase_done', done: false }];
         this.saveTodayTasks(tasks);
         return tasks;
       }
-      const tasks = undone.map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_pre_' + i, done: false }));
+      const tasks = undone.map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_phase_' + i, done: false }));
       this.saveTodayTasks(tasks);
       return tasks;
     }
