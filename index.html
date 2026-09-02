@@ -17102,8 +17102,16 @@ const SmartDaily = {
       // 入学前（pre）阶段：即使无学习数据，也生成基础准备任务（来自学期 keyTasks，属阶段合理任务，非编造）
       if (semester === 'pre') {
         const sem = getCurrentSemester();
-        const tasks = (sem && sem.keyTasks ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'])
-          .map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_' + i, done: false }));
+        const allKeys = sem && sem.keyTasks ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
+        // 读取过去已完成的任务（text 为索引），已完成的跳过，每天不重复
+        const preDone = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_pre_done') || '{}'); } catch(e) { return {}; } })();
+        const undone = allKeys.filter(k => !preDone[k]);
+        if (undone.length === 0) {
+          const tasks = [{ text: '🎉 入学前准备任务已全部完成，静待开学！', priority: 'p0', est: 0, id: 'smart_pre_done', done: false }];
+          this.saveTodayTasks(tasks);
+          return tasks;
+        }
+        const tasks = undone.map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_pre_' + i, done: false }));
         this.saveTodayTasks(tasks);
         return tasks;
       }
@@ -17184,6 +17192,12 @@ const SmartDaily = {
     if (t) {
       t.done = !t.done;
       if (t.done && t.isDebt && t.debtId) DebtPoolEngineSmart.toggle(t.debtId);
+      // 入学前阶段任务：打勾完成时记录到 smartDaily_pre_done，下次不再生成
+      if (t.done && t.id && t.id.startsWith('smart_pre_')) {
+        const preDone = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_pre_done') || '{}'); } catch(e) { return {}; } })();
+        preDone[t.text] = true;
+        localStorage.setItem('smartDaily_pre_done', JSON.stringify(preDone));
+      }
       localStorage.setItem(this.KEY_TASKS, JSON.stringify(tasks));
       if (t.done) ToastNotify.success('任务完成：' + t.text.substring(0, 20));
     }
@@ -35260,6 +35274,9 @@ document.addEventListener('click', function(e) {
 .hm-fb-dex-item{padding:6px 8px;margin-bottom:4px;background:#e6f7f3;border:1px solid #bfe8dc;border-radius:6px;font-size:12px;color:#0b6b61;}
 .hm-fb-empty{font-size:12px;color:#94a3b8;text-align:center;padding:16px;}
 .hm-fb-section-title{font-size:11.5px;color:#9a3412;font-weight:700;margin:8px 0 4px;padding-left:4px;border-left:3px solid #f59e0b;}
+@media (max-width:768px){.hm-fb-cols{grid-template-columns:1fr;}}
+@media (max-width:768px){.hm-gr-hero{padding:14px;}}
+@media (max-width:480px){.hm-rp-stats{grid-template-columns:repeat(2,1fr);}}
 </style>
 
 <!-- ==================== 新增模块：学习报告生成器（Handbook_Report） ==================== -->
@@ -40030,145 +40047,118 @@ document.addEventListener('click', function(e) {
 })();
 
 (function(){
-  let secEl=null, navEl=null, mounted=false, lastMd='';
-  const DB=window.DB;
+  let secEl=null, navEl=null, mounted=false;
   const U=()=>window.HBUtil||{};
   function esc(s){ const e=window.HBUtil&&window.HBUtil.esc; return e?e(s):String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  function rangeMs(r){ if(r==='week') return 7*864e5; if(r==='month') return 30*864e5; return Infinity; }
-  function inRange(ts, r){ const ms=rangeMs(r); if(ms===Infinity) return true; if(!ts) return true; const t=new Date(ts).getTime(); return isNaN(t)?true:(Date.now()-t)<=ms; }
-  function fmtDate(s){ return String(s||'').slice(0,10); }
-  function rangeLabel(r){ return r==='week'?'最近 7 天':(r==='month'?'最近 30 天':'全部时间'); }
 
-  async function collect(range){
-    const out={days:0,tasksDone:0,flashcards:0,mistakes:0,lit:0,project:0,feynman:0,rosalindDone:0,rosalindTotal:0,codepractice:0,ach:[],skills:[],feynmanKills:[],projects:[],litPapers:[],weakMistakes:[]};
-    try{ const sd=JSON.parse(localStorage.getItem('streakData')||'{}'); out.days=Object.values(sd).filter(function(v){return v>0;}).length; }catch(e){}
-    try{ const tasks=JSON.parse(localStorage.getItem('smartDaily_tasks')||'[]'); out.tasksDone=tasks.filter(function(t){return t.done||t.completed;}).length; }catch(e){}
-    try{ if(window.FlashcardEngine&&FlashcardEngine.getAll) out.flashcards=FlashcardEngine.getAll().length; }catch(e){}
-    try{ if(window.MistakeBook&&MistakeBook.getAll){ const all=MistakeBook.getAll(); out.mistakes=all.filter(function(m){return !m.mastered;}).length; out.weakMistakes=all.filter(function(m){return !m.mastered&&inRange(m.date||m.lastWrongAt,range);}); } }catch(e){}
-    try{ if(DB&&DB.getSetting){ const lit=(await DB.getSetting('hm_litflow_papers',[]))||[]; out.litPapers=Array.isArray(lit)?lit:[]; out.lit=out.litPapers.length; } }catch(e){}
-    try{ if(DB&&DB.getSetting){ const p=(await DB.getSetting('hm_project_forge',[]))||[]; out.projects=(Array.isArray(p)?p:[]).filter(function(x){return x.done||x.completed;}); out.project=out.projects.length; } }catch(e){}
-    try{ if(DB&&DB.getSetting){ const k=(await DB.getSetting('hm_feynman_kills',[]))||[]; const arr=Array.isArray(k)?k:[]; out.feynman=arr.length; out.feynmanKills=arr.filter(function(x){return inRange(x.killedAt,range);}); } }catch(e){}
-    try{ const ros=JSON.parse(localStorage.getItem('hm_rosalind_items')||'[]'); out.rosalindTotal=(ros||[]).length; out.rosalindDone=(ros||[]).filter(function(x){return x.status==='done';}).length; }catch(e){}
-    try{ if(DB&&DB.getSetting){ const cp=(await DB.getSetting('hm_codepractice_items',[]))||[]; out.codepractice=(Array.isArray(cp)?cp:[]).filter(function(x){return x.done||x.completed||(x.mastery!=null&&x.mastery>=4);}).length; } }catch(e){}
-    try{
-      if(window.SkillTree&&SkillTree.TREE){
-        Object.values(SkillTree.TREE).forEach(function(cat){
-          (cat.nodes||[]).forEach(function(n){
-            const m=SkillTree.getMastery?SkillTree.getMastery(n.id):0;
-            out.skills.push({name:n.name, cat:cat.name, icon:cat.icon||'📚', mastery:m});
-          });
-        });
-      }
-    }catch(e){}
-    try{ const ach=JSON.parse(localStorage.getItem('achievements_v1')||'{}'); out.ach=Object.keys(ach); }catch(e){}
-    return out;
+  async function collect(){
+    const data={ skills:[], mistakes:[], lit:[], project:[], brusing:[], feynman:[], ach:[] };
+    try{ if(window.SkillTree&&SkillTree.TREE){ const ST=window.SkillTree; Object.entries(ST.TREE).forEach(function(kv){ const catKey=kv[0], cat=kv[1]; const nodes=(cat.nodes||[]).map(function(n){ return {id:n.id,name:n.name,mastery:ST.getMastery?ST.getMastery(n.id):0}; }); const total=nodes.reduce(function(s,n){return s+n.mastery;},0); data.skills.push({cat:cat.name,total:total,count:nodes.length}); }); } }catch(e){}
+    try{ if(window.MistakeBook&&MistakeBook.getAll){ const ms=MistakeBook.getAll(); data.mistakes=Array.isArray(ms)?ms:[]; } }catch(e){}
+    try{ const lit=await U().dbGet('hm_litflow_papers',[]); data.lit=Array.isArray(lit)?lit:[]; }catch(e){}
+    try{ const p=await U().dbGet('hm_project_forge',[]); data.project=Array.isArray(p)?p:[]; }catch(e){}
+    try{ const k=await U().dbGet('hm_feynman_kills',[]); data.feynman=Array.isArray(k)?k:[]; }catch(e){}
+    try{ const ros=JSON.parse(localStorage.getItem('hm_rosalind_items')||'[]'); data.brusing=Array.isArray(ros)?ros:[]; }catch(e){}
+    try{ const a=JSON.parse(localStorage.getItem('achievements_v1')||'{}'); data.ach=Object.keys(a); }catch(e){}
+    return data;
   }
 
-  function buildMarkdown(d, range){
-    const L=[];
-    L.push('# 生信学习报告（'+rangeLabel(range)+'）');
-    L.push('');
-    L.push('> 数据来自你的真实学习记录，未编造。生成时间：'+fmtDate(new Date().toISOString()));
-    L.push('');
-    L.push('## 概览');
-    L.push('- 打卡天数：'+d.days+' 天');
-    L.push('- 已完成任务：'+d.tasksDone+' 个');
-    L.push('- 闪卡：'+d.flashcards+' 张');
-    L.push('- 薄弱错题：'+d.mistakes+' 道');
-    L.push('- 文献：'+d.lit+' 篇');
-    L.push('- 项目：'+d.project+' 个');
-    L.push('- 费曼击杀：'+d.feynman+' 只怪');
-    L.push('- Rosalind：'+d.rosalindDone+'/'+d.rosalindTotal+' 题');
-    L.push('- 编程练习：'+d.codepractice+' 题');
-    L.push('- 成就：'+d.ach.length+' 个');
-    L.push('');
-    L.push('## 技能成长');
-    const mastered=d.skills.filter(function(s){return s.mastery>=3;}).length;
-    L.push('- 已掌握（≥3 星）：'+mastered+'/'+d.skills.length);
-    L.push('');
-    L.push('| 技能 | 分类 | 掌握度 |');
-    L.push('|---|---|---|');
-    d.skills.slice().sort(function(a,b){return b.mastery-a.mastery;}).forEach(function(s){
-      L.push('| '+s.icon+' '+s.name+' | '+s.cat+' | '+'★'.repeat(s.mastery||0)+' ('+s.mastery+'/5) |');
-    });
-    L.push('');
-    L.push('## 知识攻坚（费曼击杀）');
-    if(!d.feynmanKills.length){ L.push('暂无击杀记录（去「费曼打怪场」攻克知识点）。'); }
-    else{ d.feynmanKills.slice().reverse().forEach(function(k){ L.push('- ⚔️ '+k.name+'（'+k.source+'）· '+fmtDate(k.killedAt)); }); }
-    L.push('');
-    L.push('## 薄弱错题');
-    if(!d.weakMistakes.length){ L.push('暂无薄弱错题。'); }
-    else{ d.weakMistakes.forEach(function(m){ L.push('- '+(m.topic||m.subject||'未分类')+'（错 '+((m.wrongCount||1))+' 次）'); }); }
-    L.push('');
-    L.push('## 实战产出');
-    if(!d.projects.length){ L.push('暂无已完成项目。'); }
-    else{ d.projects.forEach(function(p){ L.push('- 🛠 '+(p.name||p.title||'未命名项目')); }); }
-    L.push('- 文献：'+d.lit+' 篇');
-    L.push('- Rosalind：'+d.rosalindDone+'/'+d.rosalindTotal);
-    L.push('');
-    L.push('## 成就');
-    if(!d.ach.length){ L.push('暂无解锁成就。'); }
-    else{ d.ach.forEach(function(a){ L.push('- 🏅 '+a); }); }
-    return L.join('\n');
+  function applyRange(data, range){
+    if(range==='all'||!range) return data;
+    const now=Date.now();
+    const ms = range==='week'?7*86400000:30*86400000;
+    const inRange=function(t){ if(!t) return false; const d=typeof t==='number'?t:new Date(t).getTime(); return (now-d)<=ms; };
+    return { skills:data.skills, mistakes:data.mistakes.filter(function(m){return inRange(m.date);}), lit:data.lit.filter(function(p){return inRange(p.addedAt||p.date);}), project:data.project.filter(function(x){return inRange(x.completedAt||x.doneAt||x.date);}), brusing:data.brusing, feynman:data.feynman.filter(function(k){return inRange(k.killedAt);}), ach:data.ach };
   }
 
-  function buildHTML(d, range){
-    const stat=function(b,label){ return '<div class="hm-rp-stat"><b>'+b+'</b><span>'+label+'</span></div>'; };
-    let h='';
-    h+='<div class="hm-rp-section"><h3>📊 概览（'+rangeLabel(range)+'）</h3><div class="hm-rp-stats">'
-      +stat(d.days,'打卡天数')+stat(d.tasksDone,'完成任务')+stat(d.flashcards,'闪卡')+stat(d.mistakes,'薄弱错题')
-      +stat(d.lit,'文献')+stat(d.project,'项目')+stat(d.feynman,'费曼击杀')+stat(d.rosalindDone+'/'+d.rosalindTotal,'Rosalind')
-      +stat(d.codepractice,'编程练习')+stat(d.ach.length,'成就')
-      +'</div></div>';
-    const mastered=d.skills.filter(function(s){return s.mastery>=3;}).length;
-    const skillsSorted=d.skills.slice().sort(function(a,b){return b.mastery-a.mastery;});
-    h+='<div class="hm-rp-section"><h3>🌱 技能成长（已掌握 '+mastered+'/'+d.skills.length+'）</h3>';
-    h+='<table class="hm-rp-tbl"><thead><tr><th>技能</th><th>分类</th><th>掌握度</th></tr></thead><tbody>';
-    skillsSorted.forEach(function(s){
-      const pct=Math.round((s.mastery||0)/5*100);
-      h+='<tr><td>'+esc(s.icon)+' '+esc(s.name)+'</td><td>'+esc(s.cat)+'</td><td><div style="display:flex;align-items:center;gap:8px;"><div class="hm-rp-bar"><i style="width:'+pct+'%"></i></div><span style="font-size:11px;color:#6b7280;white-space:nowrap;">'+(s.mastery||0)+'/5</span></div></td></tr>';
-    });
-    h+='</tbody></table></div>';
-    h+='<div class="hm-rp-section"><h3>⚔️ 知识攻坚（费曼击杀 '+d.feynman+'）</h3>';
-    if(!d.feynmanKills.length){ h+='<div class="hm-rp-empty">暂无击杀记录（去「费曼打怪场」攻克知识点）。</div>'; }
-    else{ h+='<ul class="hm-rp-list">'+d.feynmanKills.slice().reverse().map(function(k){return '<li>⚔️ '+esc(k.name)+' <span style="color:#94a3b8;font-size:11px;">· '+esc(k.source)+' · '+fmtDate(k.killedAt)+'</span></li>';}).join('')+'</ul>'; }
-    h+='</div>';
-    h+='<div class="hm-rp-section"><h3>❌ 薄弱错题（'+d.weakMistakes.length+'）</h3>';
-    if(!d.weakMistakes.length){ h+='<div class="hm-rp-empty">暂无薄弱错题。</div>'; }
-    else{ h+='<ul class="hm-rp-list">'+d.weakMistakes.map(function(m){return '<li>'+esc(m.topic||m.subject||'未分类')+' <span style="color:#c81d4e;font-size:11px;">（错 '+((m.wrongCount||1))+' 次）</span></li>';}).join('')+'</ul>'; }
-    h+='</div>';
+  function render(data){
+    const c=document.getElementById('hmRpContent'); if(!c) return;
+    const totalNodes=data.skills.reduce(function(s,x){return s+x.count;},0);
+    const mastered=data.skills.reduce(function(s,x){return s+(x.count>0&&x.total/x.count>=3?x.count:0);},0);
+    const doneRos=data.brusing.filter(function(x){return x.status==='done';}).length;
+    const doneProj=data.project.filter(function(x){return x.done||x.completed;}).length;
+    const doneLit=data.lit.filter(function(x){return x.state==='archive'||x.done;}).length;
+
+    let h='<div class="hm-rp-section"><h3>📋 概览</h3><div class="hm-rp-stats">';
+    h+='<div class="hm-rp-stat"><b>'+data.mistakes.length+'</b><span>错题</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+totalNodes+'</b><span>技能节点</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+mastered+'</b><span>已掌握</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+data.lit.length+'</b><span>文献</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+doneRos+'/'+data.brusing.length+'</b><span>Rosalind</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+doneProj+'</b><span>项目</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+data.feynman.length+'</b><span>费曼击杀</span></div>';
+    h+='<div class="hm-rp-stat"><b>'+data.ach.length+'</b><span>成就</span></div>';
+    h+='</div></div>';
+
+    h+='<div class="hm-rp-section"><h3>🎯 技能成长</h3><table class="hm-rp-tbl"><tr><th>分类</th><th>节点</th><th>平均★</th><th style="width:40%;">掌握度</th></tr>';
+    if(data.skills.length){
+      data.skills.forEach(function(s){
+        const avg=s.count?(s.total/s.count).toFixed(1):'0';
+        const pct=Math.round(s.total/s.count/5*100);
+        h+='<tr><td>'+esc(s.cat)+'</td><td>'+s.count+'</td><td>'+avg+'/5</td><td><div class="hm-rp-bar"><i style="width:'+pct+'%"></i></div></td></tr>';
+      });
+    } else h+='<tr><td colspan="4" style="text-align:center;color:#94a3b8;">暂无技能数据</td></tr>';
+    h+='</table></div>';
+
+    if(data.feynman.length){
+      h+='<div class="hm-rp-section"><h3>⚔️ 费曼击杀（攻克 '+data.feynman.length+' 个）</h3><ul class="hm-rp-list">';
+      data.feynman.slice(0,20).forEach(function(k){ h+='<li>'+esc(k.name||'未知')+' <span style="color:#94a3b8;font-size:11px;">· '+esc(k.source||'')+'</span></li>'; });
+      if(data.feynman.length>20) h+='<li style="color:#94a3b8;">... 还有 '+(data.feynman.length-20)+' 个</li>';
+      h+='</ul></div>';
+    }
+
     h+='<div class="hm-rp-section"><h3>🛠 实战产出</h3>';
-    if(!d.projects.length){ h+='<div class="hm-rp-empty">暂无已完成项目。</div>'; }
-    else{ h+='<ul class="hm-rp-list">'+d.projects.map(function(p){return '<li>🛠 '+esc(p.name||p.title||'未命名项目')+'</li>';}).join('')+'</ul>'; }
-    h+='<div style="font-size:12px;color:#555;margin-top:6px;">📖 文献 '+d.lit+' 篇 · 🧬 Rosalind '+d.rosalindDone+'/'+d.rosalindTotal+' · ✏️ 编程练习 '+d.codepractice+' 题</div>';
+    h+='<p style="margin:4px 0;font-size:12.5px;color:#555;">· 项目：'+data.project.length+' 个（完成 '+doneProj+'）</p>';
+    h+='<p style="margin:4px 0;font-size:12.5px;color:#555;">· 文献：'+data.lit.length+' 篇（完成 '+doneLit+'）</p>';
+    h+='<p style="margin:4px 0;font-size:12.5px;color:#555;">· Rosalind 刷题：'+doneRos+'/'+data.brusing.length+' 通过</p>';
+    h+='<p style="margin:4px 0;font-size:12.5px;color:#555;">· 错题攻坚：'+data.mistakes.length+' 条</p>';
     h+='</div>';
-    h+='<div class="hm-rp-section"><h3>🏅 成就（'+d.ach.length+'）</h3>';
-    if(!d.ach.length){ h+='<div class="hm-rp-empty">暂无解锁成就。</div>'; }
-    else{ h+='<ul class="hm-rp-list">'+d.ach.map(function(a){return '<li>🏅 '+esc(a)+'</li>';}).join('')+'</ul>'; }
-    h+='</div>';
-    return h;
+
+    c.innerHTML=h;
+    window.__RP_DATA=data;
+  }
+
+  function toMarkdown(data){
+    const totalNodes=data.skills.reduce(function(s,x){return s+x.count;},0);
+    const mastered=data.skills.reduce(function(s,x){return s+(x.count>0&&x.total/x.count>=3?x.count:0);},0);
+    const doneRos=data.brusing.filter(function(x){return x.status==='done';}).length;
+    const doneProj=data.project.filter(function(x){return x.done||x.completed;}).length;
+    let md='# 📊 学习报告（'+new Date().toLocaleDateString('zh-CN')+'）\n\n';
+    md+='> 本报告由《生信四年作战手册》自动生成，数据来自你的真实学习记录。\n\n';
+    md+='## 📋 概览\n\n';
+    md+='| 指标 | 数量 |\n|---|---|\n';
+    md+='| 错题记录 | '+data.mistakes.length+' |\n';
+    md+='| 技能节点 | '+totalNodes+'（已掌握 '+mastered+'）|\n';
+    md+='| 文献阅读 | '+data.lit.length+' |\n';
+    md+='| Rosalind 刷题 | '+doneRos+'/'+data.brusing.length+' 通过 |\n';
+    md+='| 项目 | '+data.project.length+'（完成 '+doneProj+'）|\n';
+    md+='| 费曼击杀 | '+data.feynman.length+' 个 |\n';
+    md+='| 成就解锁 | '+data.ach.length+' 个 |\n\n';
+    md+='## 🎯 技能成长\n\n';
+    if(data.skills.length){
+      md+='| 分类 | 节点 | 平均★ |\n|---|---:|---:|\n';
+      data.skills.forEach(function(s){
+        const avg=s.count?(s.total/s.count).toFixed(1):'0';
+        md+='| '+s.cat+' | '+s.count+' | '+avg+'/5 |\n';
+      });
+    } else md+='（暂无技能数据）\n';
+    if(data.feynman.length){
+      md+='\n## ⚔️ 费曼击杀（攻克知识点）\n\n';
+      data.feynman.forEach(function(k){ md+='- '+k.name+'（'+(k.source||'')+'）\n'; });
+    }
+    return md;
   }
 
   async function refresh(){
-    const box=document.getElementById('hmRpContent'); if(!box) return;
-    const sel=document.getElementById('hmRpRange');
-    const range=sel?sel.value:'all';
-    box.innerHTML='<div class="hm-rp-empty">⏳ 正在聚合数据...</div>';
-    let d;
-    try{ d=await collect(range); }catch(e){ box.innerHTML='<div class="hm-rp-empty">数据采集失败：'+esc(e.message)+'</div>'; return; }
-    lastMd=buildMarkdown(d, range);
-    box.innerHTML=buildHTML(d, range);
-  }
-
-  async function copyMd(){
-    if(!lastMd){ await refresh(); }
-    const text=lastMd||'';
     try{
-      if(navigator.clipboard&&navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); }
-      else{ const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
-      if(window.ToastNotify) ToastNotify.success('已复制 Markdown 到剪贴板');
+      const all=await collect();
+      const range=(document.getElementById('hmRpRange')||{}).value||'all';
+      const data=applyRange(all,range);
+      render(data);
     }catch(e){
-      if(window.ToastNotify) ToastNotify.error('复制失败：'+e.message);
+      const c=document.getElementById('hmRpContent');
+      if(c) c.innerHTML='<div class="hm-rp-empty">生成失败：'+esc(e.message)+'</div>';
+      console.error('[Report]',e);
     }
   }
 
@@ -40184,15 +40174,27 @@ document.addEventListener('click', function(e) {
       const link=navEl.querySelector('.na'); if(link) link.addEventListener('click', refresh);
     }
     const gen=document.getElementById('hmRpGen'); if(gen) gen.onclick=refresh;
-    const cp=document.getElementById('hmRpCopy'); if(cp) cp.onclick=copyMd;
-    const sel=document.getElementById('hmRpRange'); if(sel) sel.onchange=refresh;
+    const range=document.getElementById('hmRpRange'); if(range) range.onchange=refresh;
+    const copy=document.getElementById('hmRpCopy');
+    if(copy) copy.onclick=function(){
+      try{
+        const md=toMarkdown(window.__RP_DATA||{skills:[],mistakes:[],lit:[],project:[],brusing:[],feynman:[],ach:[]});
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(md);
+          if(window.ToastNotify) ToastNotify.success('Markdown 已复制到剪贴板');
+        } else {
+          const ta=document.createElement('textarea');
+          ta.value=md; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+          if(window.ToastNotify) ToastNotify.success('已复制');
+        }
+      }catch(e){ if(window.ToastNotify) ToastNotify.error('复制失败'); }
+    };
     refresh();
     console.log('[Handbook_Report] mounted');
   }
   function destroy(){ try{ if(secEl) secEl.remove(); if(navEl) navEl.remove(); }catch(e){ console.error(e); } }
   window.Handbook_Report={ init, destroy, render:refresh };
 })();
-
 (function(){
   let secEl=null, navEl=null, mounted=false;
   const $=(id)=>document.getElementById(id);
