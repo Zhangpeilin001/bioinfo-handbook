@@ -17221,38 +17221,58 @@ const SmartDaily = {
     const modeMaxTasks = window.ModeManager ? ModeManager.getMaxTasks() : 8;
     const modeSpecialTasks = window.ModeManager ? ModeManager.getSpecialTasks() : [];
 
-    // 无数据保护：没有任何学习数据时，不生成假任务
-    const _hasMistakes = window.MistakeBook && MistakeBook.getAll().length > 0;
-    const _hasDebts = debts && debts.filter(d => !d.paid).length > 0;
-    const _hasCourseSchedule = window.CourseSchedule && CourseSchedule.getTotalFreeMinutes() > 0;
-    const _hasSubjectMastery = window.SubjectMastery && SubjectMastery.getAll().some(s => s.chapters.some(c => c.mastery > 0));
-    const _hasSkillTree = window.SkillTree && Object.values(SkillTree.getData() || {}).some(cat => (cat.nodes || []).some(n => SkillTree.getMastery(n.id) > 0));
-    if (!_hasMistakes && !_hasDebts && !_hasCourseSchedule && !_hasSubjectMastery && !_hasSkillTree) {
-      // 入学前（pre）阶段：即使无学习数据，也生成基础准备任务（来自学期 keyTasks，属阶段合理任务，非编造）
-      if (semester === 'pre') {
-        const sem = getCurrentSemester();
-        const allKeys = sem && sem.keyTasks ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
-        const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
-        const undone = allKeys.filter(k => !doneMap[k]);
-        if (undone.length === 0) {
-          const tasks = [{ text: '🎉 入学前准备任务已全部完成，静待开学！', priority: 'p0', est: 0, id: 'smart_pre_done', done: false }];
-          this.saveTodayTasks(tasks);
-          return tasks;
-        }
-        const tasks = undone.map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_pre_' + i, done: false }));
+    // 构建阶段上下文，即使无学习数据也能按阶段推荐
+    const _sem = getCurrentSemester();
+    const _phaseName = _sem ? _sem.name : '未知';
+    const _phaseKeyTasks = _sem && _sem.keyTasks ? _sem.keyTasks.join('、') : '';
+    // 入学前（pre）阶段：无学习数据时直接用keyTasks，不调AI（避免AI对未知大学阶段产生不准确推荐）
+    const _hasAnyData = (window.MistakeBook && MistakeBook.getAll().length > 0)
+      || (debts && debts.filter(d => !d.paid).length > 0)
+      || (window.CourseSchedule && CourseSchedule.getTotalFreeMinutes() > 0)
+      || (window.SubjectMastery && SubjectMastery.getAll().some(s => s.chapters.some(c => c.mastery > 0)))
+      || (window.SkillTree && Object.values(SkillTree.getData() || {}).some(cat => (cat.nodes || []).some(n => SkillTree.getMastery(n.id) > 0)));
+    if (!_hasAnyData && semester === 'pre') {
+      const allKeys = _sem && _sem.keyTasks ? _sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
+      const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
+      const undone = allKeys.filter(k => !doneMap[k]);
+      if (undone.length === 0) {
+        const tasks = [{ text: '🎉 入学前准备任务已全部完成，静待开学！', priority: 'p0', est: 0, id: 'smart_pre_done', done: false }];
         this.saveTodayTasks(tasks);
         return tasks;
       }
-      const emptyTasks = [];
-      this.saveTodayTasks(emptyTasks);
-      localStorage.setItem(this.KEY_DATE, this.today());
-      return emptyTasks;
+      const tasks = undone.map((k, i) => ({ text: k, priority: i < 2 ? 'p0' : 'p1', est: 30, id: 'smart_pre_' + i, done: false }));
+      this.saveTodayTasks(tasks);
+      return tasks;
     }
 
     try {
       const modeInfo = window.ModeManager ? '\n当前模式：' + ModeManager.getConfig().name + '（任务倍率' + modeMultiplier + '，上限' + modeMaxTasks + '条）' : '';
+      // 注入每日联网搜索发现（如果有）
+      let dailyUpdateContext = '';
+      try {
+        const _duData = JSON.parse(localStorage.getItem('dailyAutoUpdate_data') || '{}');
+        if (_duData && _duData.date === this.today() && _duData.timestamp) {
+          const parts = [];
+          if (_duData.resources && _duData.resources.resources && _duData.resources.resources.length > 0) {
+            parts.push('📚 最新资源：' + _duData.resources.resources.map(r => r.title + '（' + r.desc + '）').join('、'));
+          }
+          if (_duData.rosalind && _duData.rosalind.problems && _duData.rosalind.problems.length > 0) {
+            parts.push('🧩 Rosalind推荐：' + _duData.rosalind.problems.map(p => p.id + ' ' + p.name).join('、'));
+          }
+          if (_duData.events && _duData.events.events && _duData.events.events.length > 0) {
+            parts.push('📅 近期活动：' + _duData.events.events.map(e => e.name + '（截止' + (e.deadline || e.date || '待定') + '）').join('、'));
+          }
+          if (_duData.tips && _duData.tips.tips && _duData.tips.tips.length > 0) {
+            parts.push('💡 学习方法：' + _duData.tips.tips.map(t => t.title + '：' + t.action).join('、'));
+          }
+          if (_duData.remedies && _duData.remedies.remedies && _duData.remedies.remedies.length > 0) {
+            parts.push('🔧 补救建议：' + _duData.remedies.remedies.map(r => r.topic + '→' + r.method).join('、'));
+          }
+          if (parts.length > 0) dailyUpdateContext = '\n今日联网发现：' + parts.join(' | ');
+        }
+      } catch(e) {}
       const prompt = '你是生物信息学大四学长，帮大一学弟规划今日学习任务。\
-\n当前学期：' + semester + '\n智能密度：' + density + '\n近7天完成率：' + (rate >= 0 ? rate + '%' : '无数据') + '\n连续低完成率：' + (lowStreak ? '是（需减量）' : '否') + '\n当前债务：' + debts.filter(d=>!d.paid).length + ' 项未清\n逾期债务：' + debts.filter(d=>!d.paid&&d.overdue).map(d=>d.text).join('、') + modeInfo + '\n\n请生成今日 ' + Math.max(2, Math.ceil(5 * modeMultiplier)) + '-' + modeMaxTasks + ' 条学习任务，JSON 数组格式，每条包含 text(任务描述)、priority(p0/p1/p2)、est(预计分钟数)。\
+\n当前阶段：' + _phaseName + '\n阶段关键任务：' + (_phaseKeyTasks || '无') + '\n当前学期：' + semester + '\n智能密度：' + density + '\n近7天完成率：' + (rate >= 0 ? rate + '%' : '无数据') + '\n连续低完成率：' + (lowStreak ? '是（需减量）' : '否') + '\n当前债务：' + debts.filter(d=>!d.paid).length + ' 项未清\n逾期债务：' + debts.filter(d=>!d.paid&&d.overdue).map(d=>d.text).join('、') + modeInfo + dailyUpdateContext + '\n\n请生成今日 ' + Math.max(2, Math.ceil(5 * modeMultiplier)) + '-' + modeMaxTasks + ' 条学习任务，JSON 数组格式，每条包含 text(任务描述)、priority(p0/p1/p2)、est(预计分钟数)。\
 规则：p0=底线必做，p1=目标，p2=冲刺；逾期债务优先安排为 p0；' + (lowStreak ? '连续低完成率，只给3条p0任务' : '正常量') + '；任务要具体可执行。\
 只返回JSON数组，不要其他文字。';
 
@@ -17314,12 +17334,68 @@ const SmartDaily = {
     return true;
   },
 
+  // 完成任务后自动匹配技能树并涨掌握度
+  _autoBoostSkill(text) {
+    if (!window.SkillTree || !text) return;
+    try {
+      const tree = SkillTree.TREE;
+      // 构建平坦的节点名查找表
+      const nodeNameMap = {};
+      Object.values(tree).forEach(cat => {
+        (cat.nodes || []).forEach(n => { nodeNameMap[n.id] = n.name; });
+      });
+      // 额外别名映射（覆盖常见任务表达）
+      const aliasMap = {
+        python: ['Python', 'python', 'py', '爬虫', '脚本'],
+        r: ['R语言', 'R', 'r', 'ggplot', 'tidyverse', 'Bioconductor'],
+        linux: ['Linux', 'linux', 'shell', '命令行', 'bash', '终端'],
+        git: ['Git', 'git', 'github', '版本控制'],
+        calc: ['微积分', '高数', '极限', '导数', '积分', '级数', '数学分析'],
+        linalg: ['线性代数', '线代', '矩阵', '特征值'],
+        probstat: ['概率', '统计', '概率论', '数理统计'],
+        seqalign: ['序列比对', 'BLAST', 'Bowtie', 'BWA', '比对'],
+        'rna-seq': ['RNA-seq', '转录组', 'RNA', '表达量', 'DEG', '差异表达'],
+        genome: ['基因组', 'GWAS', '变异检测', 'Variant', 'call'],
+        protein: ['蛋白质', '蛋白', '结构预测', 'PDB', 'AlphaFold'],
+        pandas: ['数据处理', 'Pandas', 'pandas', '数据清洗', 'Tidyverse'],
+        viz: ['可视化', '图表', 'Matplotlib', 'Seaborn', 'ggplot2', '画图'],
+        ml: ['机器学习', 'ML', 'scikit', 'sklearn', '监督学习', '模型'],
+        dl: ['深度学习', 'DL', 'PyTorch', 'TensorFlow', '神经网络', 'CNN', 'RNN'],
+        mathstat: ['数理统计', '贝叶斯', '估计', '假设检验']
+      };
+      // 优先匹配别名
+      for (const [id, keywords] of Object.entries(aliasMap)) {
+        if (keywords.some(kw => text.includes(kw))) {
+          const current = SkillTree.getMastery(id);
+          if (current < 5) {
+            SkillTree.setMastery(id, current + 1);
+            ToastNotify.success('🎯 技能 ' + (nodeNameMap[id] || id) + ' 掌握度 +1（' + (current + 1) + '/5）');
+          }
+          return;
+        }
+      }
+      // 其次匹配关键词
+      for (const [id, name] of Object.entries(nodeNameMap)) {
+        if (text.includes(name) || text.includes(id)) {
+          const current = SkillTree.getMastery(id);
+          if (current < 5) {
+            SkillTree.setMastery(id, current + 1);
+            ToastNotify.success('🎯 技能 ' + name + ' 掌握度 +1（' + (current + 1) + '/5）');
+          }
+          return;
+        }
+      }
+    } catch(e) { console.warn('[SmartDaily] 技能树自动涨级失败', e); }
+  },
+
   toggleTask(id) {
     const tasks = this.getTodayTasks();
     const t = tasks.find(x => x.id === id);
     if (t) {
       t.done = !t.done;
       if (t.done && t.isDebt && t.debtId) DebtPoolEngineSmart.toggle(t.debtId);
+      // 任务完成时自动涨技能树
+      if (t.done) this._autoBoostSkill(t.text);
       // 任务完成时记录到 smartDaily_done_map，下次离线模板生成时不再重复
       if (t.done && t.text && !t.isDebt) {
         const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
@@ -22380,12 +22456,16 @@ const AIAutoScheduler = {
     if (dsEl) dsEl.innerHTML = this.renderSources(sources);
 
     const resultEl = document.getElementById('asResult');
-    // 无数据保护：没有任何学习数据时，不调 AI、不走规则排程——直接提示，绝不编造任务
+    // 无数据时，尝试用阶段关键任务作为数据源
+    const _semInfo = (() => {
+      try { const _s = getCurrentSemester(); return { name: (_s && _s.name) || '未知', keyTasks: (_s && _s.keyTasks) || [] }; }
+      catch(e) { return { name: '未知', keyTasks: [] }; }
+    })();
     const hasData = (sources.weakTopics && sources.weakTopics.length > 0)
       || (sources.debts && sources.debts.length > 0)
       || (sources.lowSkills && sources.lowSkills.length > 0)
       || (sources.lowMath && sources.lowMath.length > 0);
-    if (!hasData) {
+    if (!hasData && _semInfo.keyTasks.length === 0) {
       if (resultEl) resultEl.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#333;">'
         + '<div style="font-size:32px;margin-bottom:12px;">📭</div>'
         + '<div style="font-size:15px;font-weight:bold;color:#1a1a1a;margin-bottom:8px;">暂无学习数据，无法生成推荐计划</div>'
@@ -22415,6 +22495,9 @@ const AIAutoScheduler = {
 
 	    const prompt = `你是生物信息学大学生的学习规划专家。请根据以下数据生成今日最优学习计划（6-8个任务）。
 
+当前阶段：${_semInfo.name}
+阶段关键任务：${_semInfo.keyTasks.length > 0 ? _semInfo.keyTasks.join('、') : '无'}
+
 数据源：
 1. 薄弱知识点: ${JSON.stringify(sources.weakTopics)}
 2. 高频薄弱点（错题≥2次，必须重点复习）: ${JSON.stringify(sources.hotTopics)}
@@ -22428,7 +22511,7 @@ const AIAutoScheduler = {
 ${constraintsText || '（无特殊约束）'}
 
 要求：
-- 只能基于以上数据源生成任务，数据里没有的内容绝不能编造
+- 阶段关键任务可作为任务来源，无学习数据时按阶段任务推荐
 - 优先处理高频薄弱点（错题≥2次的知识点必须排P0复习任务）
 - 优先处理逾期债务
 - 考虑当前模式（军训模式减少任务量，考试周侧重复习）
@@ -22564,12 +22647,22 @@ ${constraintsText || '（无特殊约束）'}
     const modeMult = s.mode && s.mode.taskMultiplier ? s.mode.taskMultiplier : 1;
     const maxTasks = Math.min(8, Math.round(6 * modeMult));
 
-    // 无数据保护：没有任何学习数据时，不生成假任务
+    // 无数据时，尝试用阶段关键任务兜底
     const hasMistakes = s.weakTopics && s.weakTopics.length > 0;
     const hasDebts = s.debts && s.debts.length > 0;
     const hasLowSkills = s.lowSkills && s.lowSkills.length > 0;
     const hasLowMath = s.lowMath && s.lowMath.length > 0;
     if (!hasMistakes && !hasDebts && !hasLowSkills && !hasLowMath) {
+      // 有阶段关键任务则用其兜底
+      try {
+        const _sem = getCurrentSemester();
+        if (_sem && _sem.keyTasks && _sem.keyTasks.length > 0) {
+          return _sem.keyTasks.slice(0, maxTasks).map((k, i) => ({
+            title: k, duration: 30, priority: i < 2 ? 'P0' : 'P1',
+            type: '学习', score: 0.5, explain: '阶段关键任务 → 综合 0.50 分'
+          }));
+        }
+      } catch(e) {}
       return [];
     }
 
@@ -23626,16 +23719,108 @@ const AIWeeklyReport = {
     return lines.join('\n');
   },
 
-  render() {
+  // 生成阶段测验（基于近期学习内容的AI出题）
+  async generateQuiz() {
+    if (!window.AIManager || !AIManager.hasKey()) {
+      if (window.ToastNotify) ToastNotify.warning('请先配置AI Key以使用阶段测验功能');
+      return null;
+    }
+    const data = this.collectData();
+    if (!data.weakTopics && !data.totalMistakes && !data.todayTasks) {
+      if (window.ToastNotify) ToastNotify.info('暂无足够学习数据，先积累一些再测验吧');
+      return null;
+    }
+    const prompt = '你是生物信息学大一学生的自测老师。请根据以下学习数据生成3道自测题，帮助学生检验本周掌握情况。\n\n本周学习数据：' + JSON.stringify(data) + '\n\n要求：每道题包含问题、4个选项、正确答案(选项字母)、简短解析。返回JSON格式：{"quiz":[{"question":"问题","options":["A.xxx","B.xxx","C.xxx","D.xxx"],"answer":"A","explain":"解析"}]}。只返回JSON。';
+
+    try {
+      if (window.ToastNotify) ToastNotify.info('🤖 AI正在生成阶段测验...');
+      const result = await AICore.chat([{ role: 'user', content: prompt }]);
+      let jsonStr = result.text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const quiz = JSON.parse(jsonStr);
+      if (!quiz.quiz || !Array.isArray(quiz.quiz) || quiz.quiz.length === 0) throw new Error('无效');
+      this.lastQuiz = quiz.quiz;
+      this.quizAnswers = {};
+      this.renderQuiz();
+      return quiz;
+    } catch(e) {
+      console.warn('[AIWeeklyReport] 阶段测验生成失败', e);
+      if (window.ToastNotify) ToastNotify.warning('阶段测验生成失败，请重试');
+      return null;
+    }
+  },
+
+  renderQuiz() {
     const container = document.getElementById('weeklyReportView');
-    if (!container) return;
-    const reports = this.getReports();
+    if (!container || !this.lastQuiz) return;
+    const q = this.lastQuiz;
+    let html = '<div class="cd" style="padding:20px;margin:16px 0;">';
+    html += '<h3 style="color:#c81d4e;margin-bottom:12px;">📝 阶段测验</h3>';
+    html += '<p style="color:#444;font-size:13px;margin-bottom:16px;">AI根据你本周学习数据生成的自测题，检验掌握情况</p>';
+
+    q.forEach((item, i) => {
+      html += '<div style="margin-bottom:16px;padding:12px;background:rgba(15,52,96,0.1);border-radius:8px;">';
+      html += '<div style="font-weight:bold;margin-bottom:8px;color:#1a1a1a;">' + (i+1) + '. ' + item.question + '</div>';
+      html += '<div style="display:grid;gap:6px;">';
+      (item.options || []).forEach(opt => {
+        const letter = opt.charAt(0);
+        html += '<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(255,255,255,0.5);border-radius:6px;cursor:pointer;font-size:13px;color:#1a1a1a;">'
+          + '<input type="radio" name="quiz_' + i + '" value="' + letter + '" style="accent-color:#c81d4e;" onchange="AIWeeklyReport.quizAnswers[' + i + ']=\'' + letter + '\'">'
+          + '<span>' + opt + '</span></label>';
+      });
+      html += '</div>';
+      html += '<div id="quiz_result_' + i + '" style="margin-top:6px;font-size:12px;"></div></div>';
+    });
+
+    html += '<div style="text-align:center;margin-top:12px;">';
+    html += '<button onclick="AIWeeklyReport.submitQuiz()" style="background:linear-gradient(135deg,#c81d4e,#0f3460);color:#fff;border:none;padding:8px 24px;border-radius:8px;cursor:pointer;font-size:13px;">提交并评分</button>';
+    html += '<button onclick="AIWeeklyReport.render()" style="background:rgba(15,52,96,0.3);color:#1a1a1a;border:none;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;margin-left:8px;">返回周报</button>';
+    html += '</div></div>';
+    container.innerHTML = html;
+  },
+
+  submitQuiz() {
+    if (!this.lastQuiz || !this.quizAnswers) return;
+    let correct = 0, total = this.lastQuiz.length;
+    this.lastQuiz.forEach((item, i) => {
+      const userAnswer = this.quizAnswers[i] || '';
+      const isCorrect = userAnswer === item.answer;
+      if (isCorrect) correct++;
+      const el = document.getElementById('quiz_result_' + i);
+      if (el) {
+        el.innerHTML = isCorrect
+          ? '<span style="color:#0d9488;">✅ 正确！' + (item.explain ? ' ' + item.explain.substring(0, 40) : '') + '</span>'
+          : '<span style="color:#c81d4e;">❌ 错误。正确答案是 ' + item.answer + '。' + (item.explain ? ' ' + item.explain.substring(0, 40) : '') + '</span>';
+      }
+    });
+    const pct = total > 0 ? Math.round(correct / total * 100) : 0;
+    if (pct >= 60 && window.SkillTree) {
+      try {
+        const nodeNameMap = {};
+        Object.values(SkillTree.TREE).forEach(cat => (cat.nodes || []).forEach(n => { nodeNameMap[n.id] = n.name; }));
+        const firstKey = Object.keys(nodeNameMap)[0];
+        if (firstKey) {
+          const cur = SkillTree.getMastery(firstKey);
+          if (cur < 5) SkillTree.setMastery(firstKey, cur + 1);
+        }
+      } catch(e) {}
+    }
+    if (window.ToastNotify) {
+      if (pct >= 80) ToastNotify.success('🎉 阶段测验 ' + correct + '/' + total + '，正确率' + pct + '%！继续保持！');
+      else if (pct >= 60) ToastNotify.success('阶段测验 ' + correct + '/' + total + '，正确率' + pct + '%，还需巩固');
+      else ToastNotify.warning('阶段测验 ' + correct + '/' + total + '，正确率' + pct + '%，建议加强薄弱点复习');
+    }
+  },
+
+  render() {
 
     let html = '<div class="cd" style="padding:20px;margin:16px 0;">';
     html += '<h3 style="color:#c81d4e;margin-bottom:12px;">📊 AI周报</h3>';
     html += '<p style="color:#444;font-size:13px;margin-bottom:16px;">每周日自动生成，总结本周学习数据并给出下周建议</p>';
 
-    html += '<button onclick="AIWeeklyReport.generate().then(()=>AIWeeklyReport.render()).catch(e=>{console.error(e);if(window.ToastNotify)ToastNotify.warning(e.message)})" style="background:linear-gradient(135deg,#c81d4e,#0f3460);color:#fff;border:none;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;margin-bottom:16px;">🔄 立即生成本周周报</button>';
+    html += '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">';
+    html += '<button onclick="AIWeeklyReport.generate().then(()=>AIWeeklyReport.render()).catch(e=>{console.error(e);if(window.ToastNotify)ToastNotify.warning(e.message)})" style="background:linear-gradient(135deg,#c81d4e,#0f3460);color:#fff;border:none;padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;">🔄 生成周报</button>';
+    html += '<button onclick="AIWeeklyReport.generateQuiz()" style="background:rgba(15,52,96,0.3);color:#1a1a1a;border:1px solid rgba(15,52,96,0.3);padding:8px 20px;border-radius:8px;cursor:pointer;font-size:13px;">📝 阶段测验</button>';
+    html += '</div>';
 
     if (reports.length === 0) {
       html += '<div style="text-align:center;padding:40px;color:#444;">暂无周报。点击上方按钮生成本周周报，或等周日自动生成。</div>';
@@ -24231,6 +24416,38 @@ const AutoAgent = {
 
   async morningRoutine() {
     this.markDone('morning');
+    // 懈怠检测：连续3天未打开 → 通知提醒
+    try {
+      const _lastVisit = localStorage.getItem('autoAgent_lastVisit') || '';
+      const _today = getLocalDate(new Date());
+      if (_lastVisit) {
+        const _daysAway = Math.round((new Date(_today) - new Date(_lastVisit)) / 86400000);
+        if (_daysAway >= 3 && window.NotificationCenter) {
+          NotificationCenter.add({ type: 'warning', icon: '⏰', title: '已' + _daysAway + '天未见', desc: '学习需要持续，今天从10分钟开始吧', action: 'today-view', priority: 3 });
+        }
+      }
+      localStorage.setItem('autoAgent_lastVisit', _today);
+    } catch(e) {}
+
+    // 连续完成检测：历史完成天数追踪
+    try {
+      let _streakDays = parseInt(localStorage.getItem('autoAgent_streak') || '0', 10);
+      const _hist = SmartDaily.getHistory();
+      const _yesterday = getLocalDate(new Date(Date.now() - 86400000));
+      const _yesterdayDone = Array.isArray(_hist) ? _hist.filter(h => h.date === _yesterday && h.doneRate >= 80).length > 0 : false;
+      if (_yesterdayDone) {
+        _streakDays++;
+        if (_streakDays === 7 && window.NotificationCenter) {
+          NotificationCenter.add({ type: 'info', icon: '🔥', title: '连续7天完成！', desc: '一周全勤，继续保持！', action: 'today-view', priority: 1 });
+        } else if (_streakDays === 30 && window.NotificationCenter) {
+          NotificationCenter.add({ type: 'info', icon: '🏆', title: '连续30天完成！', desc: '月全勤，你是真正的自律者！', action: 'today-view', priority: 1 });
+        }
+      } else {
+        _streakDays = 0;
+      }
+      localStorage.setItem('autoAgent_streak', String(_streakDays));
+    } catch(e) {}
+
     if (!window.SmartDaily) return;
 
     const tasks = SmartDaily.getTodayTasks();
