@@ -17201,19 +17201,6 @@ const SmartDaily = {
 
   async generate() {
     if (this.isGenerated()) return this.getTodayTasks();
-
-    // 结转未完成任务到债务池（日期变化时自动执行）
-    const _prevTasks = this.getTodayTasks();
-    if (_prevTasks.length > 0) {
-      const _undone = _prevTasks.filter(t => !t.done && t.text && !t.text.includes('🎉') && (t.est > 0 || t.priority));
-      if (_undone.length > 0 && window.DebtPoolEngineSmart) {
-        for (const _t of _undone) {
-          const _label = _t.text.replace(/^\[?[Pp]\d\]?\s*/, '').substring(0, 50);
-          DebtPoolEngineSmart.add('[未完成] ' + _label, 'low', null);
-        }
-      }
-    }
-
     this.saveHistory();
 
     // 模式检查
