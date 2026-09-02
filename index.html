@@ -8417,24 +8417,17 @@ const DebtAlert = {
   },
 
   check() {
-    const completed = Storage.getObject('completed') || {};
-    const completedCount = Object.keys(completed).length;
-    if (completedCount === 0) {
+    // 使用债务池真实数据，而非统计页面上所有 checkbox
+    let debt = 0;
+    if (window.DebtPoolEngineSmart) {
+      const _all = DebtPoolEngineSmart.getDebts() || [];
+      debt = _all.filter(d => !d.paid).length;
+    }
+    if (debt === 0) {
       document.title = '生信四年作战手册 · v4.2';
       return;
     }
-    const allChecks = document.querySelectorAll('input[type="checkbox"]');
-    let debt = 0;
-    allChecks.forEach(chk => {
-      if (chk.dataset.id && !completed[chk.dataset.id]) debt++;
-    });
-
-    if (debt > 0) {
-      document.title = `(${debt}待办) 生信手册`;
-    } else {
-      document.title = '生信四年作战手册 · v4.2';
-    }
-
+    document.title = `(${debt}待还) 生信手册`;
     const today = DateUtil.format(DateUtil.today());
     if (debt >= this.threshold && this.lastAlert !== today) {
       this.lastAlert = today;
