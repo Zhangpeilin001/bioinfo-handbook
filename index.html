@@ -17213,7 +17213,12 @@ const SmartDaily = {
   async generate() {
     // 跨天时先把昨日未完成任务滚入债务池（并结清昨日完成率统计）
     this.rolloverUnfinished();
-    if (this.isGenerated()) return this.getTodayTasks();
+    if (this.isGenerated()) {
+      const existing = this.getTodayTasks();
+      if (existing && existing.length > 0) return existing;
+      // 已标记"今日已生成"但结果为空（旧版本空结果残留），清掉标记强制重新生成
+      localStorage.removeItem(this.KEY_DATE);
+    }
 
     // 模式检查
     if (window.ModeManager && ModeManager.isFrozen()) {
