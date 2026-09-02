@@ -17364,6 +17364,7 @@ const SmartDaily = {
     if (rate >= 0) html += '<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:var(--b2);color:var(--t2);">7天完成率：' + rate + '%</span>';
     if (lowStreak) html += '<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:#c81d4e;color:#1a1a1a;">连续低完成率，已减量</span>';
     html += '<button class="btn secondary" id="smartRegenBtn" style="font-size:11px;padding:2px 8px;">重新生成</button>';
+    html += '<button class="btn secondary" id="smartClearDoneBtn" style="font-size:11px;padding:2px 8px;color:#2e7d32;">✓ 一键清空已完成</button>';
     html += '</div>';
 
     const ringColor = pct === 100 ? '#2e7d32' : pct >= 50 ? '#b45309' : '#c81d4e';
@@ -17397,6 +17398,20 @@ const SmartDaily = {
       localStorage.removeItem(this.KEY_DATE);
       localStorage.removeItem(this.KEY_TASKS);
       ToastNotify.info('正在重新生成任务...');
+      this.render();
+    });
+    const clearDoneBtn = document.getElementById('smartClearDoneBtn');
+    if (clearDoneBtn) clearDoneBtn.addEventListener('click', () => {
+      const tasks = this.getTodayTasks();
+      const done = tasks.filter(t => t.done);
+      if (done.length === 0) { ToastNotify.info('没有已完成的任务需要清空'); return; }
+      const remaining = tasks.filter(t => !t.done);
+      if (remaining.length === 0) {
+        ToastNotify.info('所有任务都已完成，点击「重新生成」获取新任务');
+        return;
+      }
+      localStorage.setItem(this.KEY_TASKS, JSON.stringify(remaining));
+      ToastNotify.success('已清空 ' + done.length + ' 项已完成任务');
       this.render();
     });
 
@@ -33079,6 +33094,16 @@ function initV42() {
   if (dataSyncExportBtn) dataSyncExportBtn.onclick = () => DataSync.exportBackup();
 
   console.log('[v4.2] AI 学习引擎已加载 (DataSync + SmartDaily + DebtPoolSmart + DailyAutoUpdate + ForgettingCurveEngine + WeeklyReport + KnowledgeGraph + 竞争力引擎)');
+
+  // 默认页面：有学习数据或开学后直接打开今日任务，更符合每日使用习惯
+  SafeInit.call('DefaultSection', () => {
+    try {
+      const hasData = !!(localStorage.getItem('smartDaily_tasks') || localStorage.getItem('smartDaily_date'));
+      const sem = getCurrentSemester();
+      const target = (hasData && sem && sem.id !== 'pre') ? 'today-view' : 'overview';
+      setTimeout(() => showSection(target), 100);
+    } catch(e) { setTimeout(() => showSection('overview'), 100); }
+  });
 }
 
 if (document.readyState === 'loading') {
@@ -40536,5 +40561,58 @@ const HANDBOOK_APP_ID = 'all';
 })();
 </script>
 
+<!-- 移动端浮动快捷按钮：快速添加错题 -->
+<style>
+#addMistakeFAB {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #c81d4e;
+  color: white;
+  font-size: 24px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(200, 29, 78, 0.35);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+#addMistakeFAB:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 16px rgba(200, 29, 78, 0.45);
+}
+#addMistakeFAB:active {
+  transform: scale(0.95);
+}
+@media (min-width: 769px) {
+  #addMistakeFAB {
+    display: none;
+  }
+}
+</style>
+<button id="addMistakeFAB" onclick="document.getElementById('mistakeAddBtn')?.click();">➕</button>
+<script>
+// FAB 点击：打开错题添加表单
+document.addEventListener('DOMContentLoaded', () => {
+  const fab = document.getElementById('addMistakeFAB');
+  if (fab) {
+    fab.addEventListener('click', () => {
+      const mistakeContainer = document.getElementById('mistake-notebook');
+      if (mistakeContainer) {
+        const active = document.querySelector('.sc.active');
+        if (active && active.id !== 'mistake-notebook') {
+          showSection('mistake-notebook');
+          setTimeout(() => document.getElementById('mistakeAddForm')?.style.setProperty('display', 'block'), 100);
+        }
+      }
+    });
+  }
+});
+</script>
 </body>
 </html>
