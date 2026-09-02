@@ -5263,6 +5263,7 @@ GitHub：github.com/xxx
       <div style="font-size:24px;margin-bottom:6px;">📋</div>
       <div style="font-size:13px;color:#444;">Ctrl+V 粘贴错题截图</div>
       <div style="font-size:11px;color:#444;margin-top:4px;">微信截图后直接粘贴，AI自动识别题目文字</div>
+      <div style="margin-top:8px;"><button type="button" onclick="MistakeBook.uploadImage()" class="ai-dark-btn" style="font-size:12px;padding:4px 12px;">📷 选择图片上传</button></div>
     </div>
     <div id="mistakeImagePreview" style="display:none;margin-bottom:12px;"></div>
     <div style="margin-bottom:8px;">
@@ -5591,6 +5592,7 @@ GitHub：github.com/xxx
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
     <h3 style="margin:0;color:#c81d4e !important;">📋 我的课表</h3>
     <button class="ai-dark-btn" id="scheduleAddBtn">+ 添加课程</button>
+    <button class="ai-dark-btn secondary" onclick="CourseSchedule.aiImportFromImage()" style="font-size:12px;padding:4px 10px;">📷 AI识别课表</button>
   </div>
   <div id="scheduleContainer"></div>
 </div>
@@ -15350,6 +15352,81 @@ const AICore = {
   }
 };
 
+// ===== 图片上传工具函数 =====
+function readImageAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error('未选择文件'));
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('图片读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function showImagePicker() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', async () => {
+      document.body.removeChild(input);
+      if (input.files && input.files[0]) {
+        try { const b64 = await readImageAsBase64(input.files[0]); resolve(b64); }
+        catch(e) { resolve(null); }
+      } else { resolve(null); }
+    });
+    input.addEventListener('cancel', () => {
+      document.body.removeChild(input);
+      resolve(null);
+    });
+    input.click();
+    setTimeout(() => {
+      if (document.body.contains(input)) { document.body.removeChild(input); resolve(null); }
+    }, 5000);
+  });
+}
+
+async function chatVisionEnhanced(imageBase64, textPrompt) {
+  const visionModels = [
+    { name: '百炼', keyField: 'qwen_key', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen-vl-plus' },
+    { name: '智谱', keyField: 'zhipu_key', url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4v' },
+    { name: '硅基', keyField: 'silicon_key', url: 'https://api.siliconflow.cn/v1/chat/completions', model: 'Qwen/Qwen2-VL-72B-Instruct' },
+    { name: '豆包', keyField: 'doubao_key', url: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions', model: 'doubao-seed-2-1-vision-32k-250615' }
+  ];
+  const cfg = AICore.config || {};
+  const messages = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: textPrompt },
+      { type: 'image_url', image_url: { url: imageBase64 } }
+    ]
+  }];
+  for (const m of visionModels) {
+    const key = cfg[m.keyField] || '';
+    if (!key) continue;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 30000);
+      const resp = await fetch(m.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+        body: JSON.stringify({ model: m.model, messages, temperature: 0.3, max_tokens: 2000 }),
+        signal: ctrl.signal
+      });
+      clearTimeout(t);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      if (data.choices && data.choices[0] && data.choices[0].message) {
+        const text = data.choices[0].message.content;
+        if (text && text.length > 10) { return text; }
+      }
+    } catch(e) { /* try next */ }
+  }
+  throw new Error('所有视觉模型均不可用，请配置百炼/智谱/硅基/豆包中的任意一个 API Key');
+}
+
 // ===== 模块3：AI 管家悬浮窗 =====
 const AIManager = {
   isOpen: false,
@@ -16076,6 +16153,21 @@ const MistakeBook = {
     if (window.ToastNotify) ToastNotify.info('直接按 Ctrl+V 粘贴截图即可');
   },
 
+  // 选择图片上传（手机端/不支持粘贴时使用）
+  async uploadImage() {
+    const b64 = await showImagePicker();
+    if (!b64) return;
+    this.pastedImage = b64;
+    const preview = document.getElementById('mistakeImagePreview');
+    if (preview) {
+      preview.innerHTML = '<img src="' + b64 + '" style="max-width:100%;border-radius:8px;border:1px solid rgba(0,0,0,0.12);"><button onclick="MistakeBook.clearImage()" style="margin-top:4px;font-size:11px;color:#c81d4e;background:none;border:none;cursor:pointer;">✕ 移除图片</button>';
+      preview.style.display = 'block';
+    }
+    const ocrBtn = document.getElementById('mistakeOcrBtn');
+    if (ocrBtn) ocrBtn.style.display = '';
+    if (window.ToastNotify) ToastNotify.success('图片已上传，点击「AI识别图片」提取文字');
+  },
+
   handlePaste(e) {
     const form = document.getElementById('mistakeAddForm');
     if (!form || form.style.display === 'none') return;
@@ -16119,7 +16211,7 @@ const MistakeBook = {
 
     try {
       const prompt = '请识别这张图片中的题目文字，完整输出题目内容。如果是数学公式，用文字描述。如果有多个小题，全部识别。只输出识别到的题目文字，不要加额外说明。';
-      const result = await AICore.chatVision(this.pastedImage, prompt);
+      const result = await chatVisionEnhanced(this.pastedImage, prompt);
       if (questionInput) {
         const existing = questionInput.value.trim();
         questionInput.value = existing ? existing + '\n' + result : result;
@@ -16127,7 +16219,7 @@ const MistakeBook = {
       const topicInput = document.getElementById('mistakeTopicInput');
       if (topicInput && !topicInput.value.trim()) {
         const topicPrompt = '这张图片中的题目涉及什么知识点？只回答知识点名称（10字以内），不要其他文字。';
-        const topic = await AICore.chatVision(this.pastedImage, topicPrompt);
+        const topic = await chatVisionEnhanced(this.pastedImage, topicPrompt);
         topicInput.value = topic.trim().substring(0, 30);
       }
       if (window.ToastNotify) ToastNotify.success('AI识别完成，请检查并补充信息');
@@ -20191,6 +20283,37 @@ const CourseSchedule = {
     });
     document.getElementById('scheduleAddForm').style.display = 'none';
     this.render();
+  },
+
+  // AI 识别课表截图
+  async aiImportFromImage() {
+    const b64 = await showImagePicker();
+    if (!b64) return;
+    ToastNotify.info('正在识别课表截图...');
+    try {
+      const text = await chatVisionEnhanced(b64,
+        '你是一个课表识别助手。请识别这张大学课表截图中的全部课程信息，返回 JSON 数组，每个元素包含：' +
+        'name（课程名）、startTime（上课时间如"08:00"）、endTime（下课时间如"09:40"）、' +
+        'location（上课地点，可选）、teacher（教师名，可选）、days（星期数组，如["mon","wed","fri"]）。' +
+        '星期映射：周一=mon, 周二=tue, 周三=wed, 周四=thu, 周五=fri, 周六=sat, 周日=sun。' +
+        '只返回 JSON 数组，不要其他文字。如果识别不到准确信息，尽量根据常识推断补全。'
+      );
+      let courses;
+      try { courses = JSON.parse(text.replace(/```json/g,'').replace(/```/g,'').trim()); }
+      catch(e) { throw new Error('AI 返回格式异常，请手动添加课程'); }
+      if (!Array.isArray(courses) || courses.length === 0) throw new Error('未识别到课程');
+      const existing = this.getSchedule();
+      courses.forEach(c => {
+        if (c.name && c.startTime && c.endTime && c.days && c.days.length > 0) {
+          existing.push({ name: c.name, startTime: c.startTime, endTime: c.endTime, location: c.location || '', teacher: c.teacher || '', days: c.days });
+        }
+      });
+      this.saveSchedule(existing);
+      this.render();
+      ToastNotify.success('✅ 成功导入 ' + courses.length + ' 门课程，请检查并补充');
+    } catch(e) {
+      ToastNotify.error('识别失败: ' + e.message);
+    }
   }
 };
 window.CourseSchedule = CourseSchedule;
