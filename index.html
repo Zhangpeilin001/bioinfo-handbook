@@ -9334,28 +9334,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch(e) { console.error(e); }
 
-      // 3) 债务池联动增强：数据驱动自动累积（每天一次，读 SmartDaily 今日任务，未完成自动进债务池，不依赖 DOM/勾选事件）
+      // 3) 启动即驱动 SmartDaily 生成今日任务；跨天滚动（昨日未完成→债务池）在 generate() 内部统一处理
       try {
-        if (window.SmartDaily && window.DebtPoolEngineSmart && typeof SmartDaily.getTodayTasks === 'function') {
-          const x = new Date();
-          const today = new Date(x.getTime()-x.getTimezoneOffset()*60000).toISOString().slice(0,10);
-          if (localStorage.getItem('hb_debt_auto_date') !== today) {
-            const ts = SmartDaily.getTodayTasks() || [];
-            const undone = ts.filter(t => !(t.done || t.completed) && !t.isDebt).slice(0, 5);   // 排除清债任务本身，避免债务循环；最多 5 条
-            if (undone.length) {
-              const debts = DebtPoolEngineSmart.getDebts();
-              let added = 0;
-              undone.forEach(t => {
-                const text = String(t.text || t.title || '').trim();
-                if (!text) return;
-                if (debts.some(d => d.text === text && !d.paid)) return;   // 已存在未清债务（任意 source）则不重复累积
-                debts.push({ id: 'debt-auto-' + Date.now() + Math.random().toString(36).slice(2,7), text, type: 'credit', deadline: null, source: 'auto', paid: false, created: new Date().toISOString(), overdue: false });
-                added++;
-              });
-              if (added) DebtPoolEngineSmart.saveDebts(debts);
-            }
-            localStorage.setItem('hb_debt_auto_date', today);
-          }
+        if (window.SmartDaily && typeof SmartDaily.generate === 'function') {
+          SmartDaily.generate().catch(e => console.warn('[SmartDaily bootstrap]', e));
         }
       } catch(e) { console.error(e); }
     }, 3000);
@@ -16996,6 +16978,8 @@ const SmartDaily = {
   KEY_TASKS: 'smartDaily_tasks',
   KEY_HISTORY: 'smartDaily_history',
 
+  currentFilter: 'all',
+
   today() { return getLocalDate(new Date()); },
   isGenerated() { return localStorage.getItem(this.KEY_DATE) === this.today(); },
 
@@ -17023,6 +17007,43 @@ const SmartDaily = {
     const dates = Object.keys(hist).sort();
     while (dates.length > 14) { delete hist[dates.shift()]; }
     localStorage.setItem(this.KEY_HISTORY, JSON.stringify(hist));
+  },
+
+  // 跨天滚动：把"上一个日期"未完成的任务自动滚入债务池，让用户明确看到自己没干什么。
+  // 在每次 generate() 起始处调用；仅当存储的 KEY_DATE 是过去日期时才执行，天然幂等（去重）。
+  rolloverUnfinished() {
+    try {
+      const savedDate = localStorage.getItem(this.KEY_DATE);
+      const today = this.today();
+      if (!savedDate || savedDate === today) return;   // 首次或当天，无跨天
+      const tasks = this.getTodayTasks();
+      if (!tasks || tasks.length === 0) return;
+
+      // 1) 把昨日完成率记到"昨日"（而非今天），保证历史统计日期正确
+      const done = tasks.filter(t => t.done).length;
+      const hist = this.getHistory();
+      hist[savedDate] = { total: tasks.length, done: done, rate: Math.round(done / tasks.length * 100) };
+      const dates = Object.keys(hist).sort();
+      while (dates.length > 14) { delete hist[dates.shift()]; }
+      localStorage.setItem(this.KEY_HISTORY, JSON.stringify(hist));
+
+      // 2) 昨日未完成（排除清债任务本身，避免债务循环）滚入债务池
+      const undone = tasks.filter(t => !(t.done || t.completed) && !t.isDebt);
+      if (!undone.length) return;
+      const debts = DebtPoolEngineSmart.getDebts();
+      let added = 0;
+      undone.forEach(t => {
+        const text = String(t.text || t.title || '').trim();
+        if (!text) return;
+        if (debts.some(d => d.text === text && !d.paid)) return;   // 已存在未清债务则不重复
+        debts.push({ id: 'debt-auto-' + Date.now() + Math.random().toString(36).slice(2, 7), text: text, type: 'credit', deadline: null, source: 'auto', paid: false, created: new Date().toISOString(), overdue: false });
+        added++;
+      });
+      if (added) {
+        DebtPoolEngineSmart.saveDebts(debts);
+        ToastNotify.info('已将 ' + added + ' 项昨日未完成任务滚入债务池', 4000);
+      }
+    } catch (e) { console.warn('[SmartDaily rollover]', e); }
   },
 
   getTodayTasks() {
@@ -17193,8 +17214,9 @@ const SmartDaily = {
   },
 
   async generate() {
+    // 跨天时先把昨日未完成任务滚入债务池（并结清昨日完成率统计）
+    this.rolloverUnfinished();
     if (this.isGenerated()) return this.getTodayTasks();
-    this.saveHistory();
 
     // 模式检查
     if (window.ModeManager && ModeManager.isFrozen()) {
@@ -17414,8 +17436,24 @@ const SmartDaily = {
     ToastNotify.info('任务顺序已调整');
   },
 
+  filterTasks(type) {
+    this.currentFilter = type || 'all';
+    try {
+      document.querySelectorAll('#taskFilterBar button').forEach(function (btn) {
+        const has = btn.textContent || '';
+        const active = (type === 'all' && has.indexOf('全部') >= 0)
+          || (type === 'p0' && has.indexOf('P0') >= 0)
+          || (type === 'p1' && has.indexOf('P1') >= 0)
+          || (type === 'p2' && has.indexOf('P2') >= 0)
+          || (type === 'debt' && has.indexOf('债务') >= 0);
+        if (active) btn.classList.add('primary'); else btn.classList.remove('primary');
+      });
+    } catch (e) {}
+    this.render();
+  },
+
   async render() {
-    const container = document.getElementById('todayTaskList');
+    const container = document.getElementById('smartTaskList') || document.getElementById('todayTaskList');
     if (!container) return;
 
     let tasks = this.getTodayTasks();
@@ -17457,6 +17495,13 @@ const SmartDaily = {
     const totalCount = tasks.length;
     const pct = totalCount > 0 ? Math.round(doneCount / totalCount * 100) : 0;
 
+    // 应用 P0/P1/P2/债务 筛选（仅影响下方列表展示，不影响完成率统计）
+    let displayTasks = tasks;
+    if (this.currentFilter === 'p0') displayTasks = tasks.filter(t => t.priority === 'p0');
+    else if (this.currentFilter === 'p1') displayTasks = tasks.filter(t => t.priority === 'p1');
+    else if (this.currentFilter === 'p2') displayTasks = tasks.filter(t => t.priority === 'p2');
+    else if (this.currentFilter === 'debt') displayTasks = tasks.filter(t => t.isDebt);
+
     let html = '<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
     html += '<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:var(--b2);color:var(--t2);">密度：' + density + '</span>';
     if (rate >= 0) html += '<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:var(--b2);color:var(--t2);">7天完成率：' + rate + '%</span>';
@@ -17475,7 +17520,7 @@ const SmartDaily = {
     html += '<span style="font-size:11px;color:var(--t3);">拖拽调整顺序</span>';
     html += '</div>';
 
-    html += tasks.map(t => {
+    html += displayTasks.map(t => {
       const pColor = t.priority === 'p0' ? 'var(--accent-red)' : t.priority === 'p1' ? 'var(--accent-orange)' : 'var(--accent-green)';
       const pLabel = t.priority === 'p0' ? '底线' : t.priority === 'p1' ? '目标' : '冲刺';
       return '<div class="today-task-item' + (t.done ? ' done' : '') + '" draggable="true" data-task-id="' + t.id + '" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border-light);cursor:grab;transition:background 0.2s;">'
@@ -19198,6 +19243,44 @@ window.ToastNotify = ToastNotify;
   }
   if (window.TodayTaskEngine && typeof TodayTaskEngine.render === 'function') {
     TodayTaskEngine.render = _routeToSmartDaily;
+  }
+
+  // 停用 SmartToday 的"全学期 checkbox 扫描"（这是"今日任务=191条学期任务"的根因），
+  // 把 SmartToday 的今日任务列表整体委托给 SmartDaily，让面板显示每日智能生成的少量任务。
+  if (window.SmartToday) {
+    SmartToday.scanHandbookTasks = function () { return []; };
+    SmartToday.scanDebtPoolTasks = function () { return []; };
+    SmartToday.scanAllTasks = function () { return []; };
+    SmartToday.renderTaskList = function () { _routeToSmartDaily(); };
+    SmartToday.applyFilter = function () {
+      if (window.SmartDaily && typeof SmartDaily.filterTasks === 'function') {
+        try { SmartDaily.filterTasks(this.currentFilter); return; } catch (e) { console.warn('[SmartToday.applyFilter]', e); }
+      }
+      _routeToSmartDaily();
+    };
+    SmartToday.filterTasks = function (type) {
+      this.currentFilter = type;
+      this.applyFilter();
+    };
+    SmartToday.refresh = function () {
+      try {
+        if (this.updateTimeBar) this.updateTimeBar();
+        if (this.updatePhaseInfo) this.updatePhaseInfo();
+        if (this.updateCountdown) this.updateCountdown();
+        if (this.updateDynamicContent) this.updateDynamicContent();
+        this.updateTaskCount();
+      } catch (e) { console.warn('[SmartToday.refresh]', e); }
+      _routeToSmartDaily();
+    };
+    SmartToday.updateTaskCount = function () {
+      const countEl = document.getElementById('taskTotalCount');
+      if (countEl && window.SmartDaily) {
+        try {
+          const ts = SmartDaily.getTodayTasks() || [];
+          countEl.textContent = ts.filter(t => !t.done).length;
+        } catch (e) {}
+      }
+    };
   }
   // 屏蔽旧债务同步：旧 syncFromTodayTasks 会从 DOM 未勾选 checkbox 制造 source==='today' 假债务，
   // 债务来源统一改由 SmartDaily 自动累积（hb_debt_auto_date 机制）管理。
