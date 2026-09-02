@@ -18460,7 +18460,7 @@ const DailyAutoUpdate = {
 
     // 刷新当前页面
     if (window.SmartDaily) SmartDaily.render();
-    if (window.DebtPoolEngineSmart) DebtPoolEngineSmart.render();
+    if (window.DebtPoolEngine && DebtPoolEngine.render) DebtPoolEngine.render();
     this.updateStatusDisplay();
 
     return updateData;
@@ -19178,6 +19178,45 @@ window.SemesterGoal = SemesterGoal;
 window.SmartDaily = SmartDaily;
 window.DebtPoolEngineSmart = DebtPoolEngineSmart;
 window.ToastNotify = ToastNotify;
+
+// ===== 今日任务统一入口：屏蔽旧引擎，全部走 SmartDaily（智能每日任务）=====
+// 旧的 renderTodayView / SmartTaskLayer.renderTodayPanel / TodayTaskEngine.render 会扫描
+// 整个学期的 checkbox/模板，把"学期任务"当作"今日任务"，导致今日任务面板混入几十上百条
+// 学期任务，并通过 syncFromTodayTasks 制造大量假债务。这里统一重定向到 SmartDaily，
+// 保证"今日任务 = 每天智能生成的少量任务（5~7条）"。
+(function () {
+  function _routeToSmartDaily() {
+    if (window.SmartDaily && typeof SmartDaily.render === 'function') {
+      try { SmartDaily.render(); } catch (e) { console.warn('[SmartDaily route]', e); }
+    }
+  }
+  if (typeof window.renderTodayView === 'function') {
+    window.renderTodayView = _routeToSmartDaily;
+  }
+  if (window.SmartTaskLayer && typeof SmartTaskLayer.renderTodayPanel === 'function') {
+    SmartTaskLayer.renderTodayPanel = _routeToSmartDaily;
+  }
+  if (window.TodayTaskEngine && typeof TodayTaskEngine.render === 'function') {
+    TodayTaskEngine.render = _routeToSmartDaily;
+  }
+  // 屏蔽旧债务同步：旧 syncFromTodayTasks 会从 DOM 未勾选 checkbox 制造 source==='today' 假债务，
+  // 债务来源统一改由 SmartDaily 自动累积（hb_debt_auto_date 机制）管理。
+  if (window.DebtPoolEngine && typeof DebtPoolEngine.syncFromTodayTasks === 'function') {
+    DebtPoolEngine.syncFromTodayTasks = function () { /* 已废弃 */ };
+  }
+  // 一次性清理：移除旧 syncFromTodayTasks 遗留的 source==='today' 假债务
+  try {
+    if (window.DebtPoolEngineSmart) {
+      const _db = DebtPoolEngineSmart.getDebts();
+      const _kept = _db.filter(d => d.source !== 'today');
+      if (_kept.length !== _db.length) {
+        DebtPoolEngineSmart.saveDebts(_kept);
+        console.log('[DebtClean] 已清理 ' + (_db.length - _kept.length) + ' 条旧假债务(source=today)');
+        if (window.DebtPoolEngine && DebtPoolEngine.render) { try { DebtPoolEngine.render(); } catch (e) {} }
+      }
+    }
+  } catch (e) { console.warn('[DebtClean]', e); }
+})();
 window.MistakeAnalyzer = MistakeAnalyzer;
 window.DailyInsight = DailyInsight;
 window.ExamReadiness = ExamReadiness;
