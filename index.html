@@ -16999,6 +16999,14 @@ const SmartDaily = {
     if (density !== 'high') tasks.push(...tmpl.target);
     if (density === 'low' || density === 'holiday') tasks.push(...tmpl.sprint);
 
+    // 离线模板任务：跳过已完成的任务（smartDaily_done_map），确保每天不重复
+    const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
+    tasks = tasks.filter(t => !doneMap[t.text]);
+    // 如果所有任务都已完成，至少保留 2 条未完成的作为"复习巩固"
+    if (tasks.length < 2) {
+      tasks = [...tmpl.baseline]; // 重新用 baseline
+    }
+
     // 模式：添加特殊任务
     const modeSpecialTasks = window.ModeManager ? ModeManager.getSpecialTasks() : [];
     if (modeSpecialTasks.length > 0) {
@@ -17103,9 +17111,8 @@ const SmartDaily = {
       if (semester === 'pre') {
         const sem = getCurrentSemester();
         const allKeys = sem && sem.keyTasks ? sem.keyTasks : ['了解专业方向', '准备入学材料', 'Python基础入门', '英语四级备考'];
-        // 读取过去已完成的任务（text 为索引），已完成的跳过，每天不重复
-        const preDone = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_pre_done') || '{}'); } catch(e) { return {}; } })();
-        const undone = allKeys.filter(k => !preDone[k]);
+        const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
+        const undone = allKeys.filter(k => !doneMap[k]);
         if (undone.length === 0) {
           const tasks = [{ text: '🎉 入学前准备任务已全部完成，静待开学！', priority: 'p0', est: 0, id: 'smart_pre_done', done: false }];
           this.saveTodayTasks(tasks);
@@ -17192,11 +17199,14 @@ const SmartDaily = {
     if (t) {
       t.done = !t.done;
       if (t.done && t.isDebt && t.debtId) DebtPoolEngineSmart.toggle(t.debtId);
-      // 入学前阶段任务：打勾完成时记录到 smartDaily_pre_done，下次不再生成
-      if (t.done && t.id && t.id.startsWith('smart_pre_')) {
-        const preDone = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_pre_done') || '{}'); } catch(e) { return {}; } })();
-        preDone[t.text] = true;
-        localStorage.setItem('smartDaily_pre_done', JSON.stringify(preDone));
+      // 任务完成时记录到 smartDaily_done_map，下次离线模板生成时不再重复
+      if (t.done && t.text && !t.isDebt) {
+        const doneMap = (() => { try { return JSON.parse(localStorage.getItem('smartDaily_done_map') || '{}'); } catch(e) { return {}; } })();
+        doneMap[t.text] = true;
+        // 只保留最近 60 条记录防止膨胀
+        const keys = Object.keys(doneMap);
+        if (keys.length > 60) { delete doneMap[keys[0]]; }
+        localStorage.setItem('smartDaily_done_map', JSON.stringify(doneMap));
       }
       localStorage.setItem(this.KEY_TASKS, JSON.stringify(tasks));
       if (t.done) ToastNotify.success('任务完成：' + t.text.substring(0, 20));
