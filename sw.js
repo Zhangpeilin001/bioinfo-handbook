@@ -7,7 +7,7 @@
    版本号递增触发 SW 重装，清掉旧缓存。改 index.html 后记得同步递增。
    ============================================================ */
 
-const CACHE_NAME = 'shengxin-handbook-v4.4';
+const CACHE_NAME = 'shengxin-handbook-v4.5';
 const urlsToCache = [
   './',
   'manifest.json'
