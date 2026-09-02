@@ -17201,6 +17201,19 @@ const SmartDaily = {
 
   async generate() {
     if (this.isGenerated()) return this.getTodayTasks();
+
+    // 结转未完成任务到债务池（日期变化时自动执行）
+    const _prevTasks = this.getTodayTasks();
+    if (_prevTasks.length > 0) {
+      const _undone = _prevTasks.filter(t => !t.done && t.text && !t.text.includes('🎉') && (t.est > 0 || t.priority));
+      if (_undone.length > 0 && window.DebtPoolEngineSmart) {
+        for (const _t of _undone) {
+          const _label = _t.text.replace(/^\[?[Pp]\d\]?\s*/, '').substring(0, 50);
+          DebtPoolEngineSmart.add('[未完成] ' + _label, 'low', null);
+        }
+      }
+    }
+
     this.saveHistory();
 
     // 模式检查
@@ -24516,6 +24529,27 @@ const AutoAgent = {
     if (window.NotificationCenter) {
       NotificationCenter.add({ type: 'info', icon: '🌅', title: 'AI教练晨间报告', desc: msg.substring(0, 80), action: 'today-view', priority: 1 });
     }
+
+    // 每日一题：有学习数据时主动推送一道练习
+    try {
+      if (window.ExerciseGenerator && !this.isDone('quiz')) {
+        const _hasData = (window.MistakeBook && MistakeBook.getAll().length > 0) || (window.SkillTree && Object.values(SkillTree.getData() || {}).some(d => d && (d.mastery || 0) > 0));
+        if (_hasData) {
+          const _topic = window.ExerciseGenerator.getRecommendedTopic ? window.ExerciseGenerator.getRecommendedTopic() : '';
+          if (_topic) {
+            if (window.NotificationCenter) {
+              NotificationCenter.add({
+                type: 'info', icon: '📝', title: '今日一题：' + _topic.substring(0, 20),
+                desc: 'AI根据你的学习进度生成了一道练习题，试试看！',
+                action: 'section-exercise-generator', priority: 2
+              });
+            }
+          }
+          this.markDone('quiz');
+        }
+      }
+    } catch(e) { console.warn('[AutoAgent] 每日一题推送失败:', e); }
+
     if (actions.length > 0 && window.ClosedLoop) ClosedLoop.track({ type: 'auto_agent', detail: actions.join('、'), source: 'morning' });
   },
 
@@ -24537,6 +24571,13 @@ const AutoAgent = {
       msg = `已完成${rate}%，还剩${tasks.length - done}个，快到终点了！`;
     } else {
       msg = `今天的任务全部完成了！可以提前学明天的，或者休息。`;
+    }
+    // 催办时提示债务池
+    if (rate < 100 && window.DebtPoolEngineSmart) {
+      const _debts = DebtPoolEngineSmart.getDebts().filter(d => !d.paid);
+      if (_debts.length > 0) {
+        msg += `\n\n💳 债务池还有${_debts.length}笔未清，今天未完成的任务明早会自动结转进去。`;
+      }
     }
     this.pushMessage(msg, '⚡');
   },
@@ -24587,6 +24628,17 @@ const AutoAgent = {
         d.tomorrowCarryover = undone.slice(0, 3).map(t => t.text || t.title || '').filter(Boolean);
         this.saveData(d);
       }
+    }
+
+    // 晚间提醒：未完成任务明早自动进债务池
+    const _undoneCount = tasks.filter(t => !t.done).length;
+    if (_undoneCount > 0 && window.NotificationCenter) {
+      NotificationCenter.add({
+        type: 'info', icon: '💳',
+        title: _undoneCount + '个任务未完成',
+        desc: '明天打开应用时会自动结转到债务池，可到债务池查看未清项。',
+        action: 'debt-pool', priority: 2
+      });
     }
 
     if (window.AIManager && AIManager.hasKey && AIManager.hasKey()) {
